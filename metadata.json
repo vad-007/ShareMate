@@ -1,0 +1,7 @@
+{
+  "name": "ShareMates",
+  "description": "Shared-living expense tracker with AI-powered receipt scanning and smart settlement.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
