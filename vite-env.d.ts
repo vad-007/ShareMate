@@ -6,9 +6,3 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv
 }
-
-declare const process: {
-  env: {
-    [key: string]: string | undefined
-  }
-}
