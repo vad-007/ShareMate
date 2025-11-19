@@ -1,23 +1,43 @@
-import React, { useState } from 'react';
+
+import React, { useState, useMemo } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
-import { Expense, User, Category } from '../types';
-import { formatCurrency } from '../utils/calculations';
-import { Wallet, TrendingUp, Receipt, RefreshCw, Plus, ArrowRightLeft, Zap, Send } from 'lucide-react';
+import { Expense, User, Category, ConfirmationStatus } from '../types';
+import { formatCurrency, calculateBalances } from '../utils/calculations';
+import { Wallet, TrendingUp, Receipt, RefreshCw, Plus, ArrowRightLeft, Zap, Send, Mic, CheckCircle2, AlertCircle, Flag, Paperclip, X, Filter, ArrowUpDown, Search } from 'lucide-react';
 import { Button } from './Button';
 
 interface DashboardProps {
   expenses: Expense[];
   users: User[];
+  currentUser: User;
   currency: string;
-  onQuickAdd: (expense: Expense) => void;
+  onQuickAddTemplate: (expense: Expense) => void;
   onQuickSplit: (description: string, amount: number) => void;
+  onOpenQuickAddModal: () => void;
+  onToggleConfirmation: (expenseId: string, status: ConfirmationStatus) => void;
+  onExpenseClick: (expense: Expense) => void;
 }
 
 const COLORS = ['#22c55e', '#0ea5e9', '#f59e0b', '#ef4444', '#8b5cf6', '#64748b', '#ec4899'];
 
-export const Dashboard: React.FC<DashboardProps> = ({ expenses, users, currency, onQuickAdd, onQuickSplit }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ 
+  expenses, 
+  users, 
+  currentUser,
+  currency, 
+  onQuickAddTemplate, 
+  onQuickSplit, 
+  onOpenQuickAddModal,
+  onToggleConfirmation,
+  onExpenseClick
+}) => {
   const [quickDesc, setQuickDesc] = useState('');
   const [quickAmount, setQuickAmount] = useState('');
+  
+  // Filter/Sort State
+  const [sortBy, setSortBy] = useState<'DATE' | 'AMOUNT' | 'CATEGORY' | 'PAYER'>('DATE');
+  const [filterPayer, setFilterPayer] = useState<string>('ALL');
+  const [searchTerm, setSearchTerm] = useState('');
 
   const handleQuickSplitSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -28,11 +48,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ expenses, users, currency,
     }
   };
 
-  // Filter out settlements for spending stats
+  // --- Stats Calculations ---
   const billExpenses = expenses.filter(e => e.type !== 'SETTLEMENT');
-  
   const totalSpent = billExpenses.reduce((acc, curr) => acc + curr.amount, 0);
   
+  const balances = useMemo(() => calculateBalances(expenses, users), [expenses, users]);
+  const maxBalance = Math.max(...Object.values(balances).map((b: number) => Math.abs(b)), 1);
+
   const categoryData = Object.values(Category)
     .filter(cat => cat !== Category.SETTLEMENT)
     .map(cat => {
@@ -42,27 +64,74 @@ export const Dashboard: React.FC<DashboardProps> = ({ expenses, users, currency,
       return { name: cat, value };
     }).filter(item => item.value > 0);
 
-  const userSpending = users.map(user => {
-    const spent = billExpenses
-      .filter(e => e.payerId === user.id)
-      .reduce((acc, curr) => acc + curr.amount, 0);
-    return { name: user.name, value: spent };
-  }).sort((a, b) => b.value - a.value);
+  const getConfirmationStats = (expense: Expense) => {
+     if (!expense.confirmations) return null;
+     const total = expense.involvedUserIds.length;
+     const confirmed = Object.values(expense.confirmations).filter(s => s === 'CONFIRMED').length;
+     const flagged = Object.values(expense.confirmations).filter(s => s === 'FLAGGED').length;
+     return { total, confirmed, flagged, pending: total - confirmed - flagged };
+  };
 
-  // Get unique recurring expenses
-  const recurringTemplates = expenses
-    .filter(e => e.isRecurring && e.type !== 'SETTLEMENT')
-    .reduce((acc, current) => {
-        const x = acc.find(item => item.description === current.description && item.amount === current.amount);
-        if (!x) {
-          return acc.concat([current]);
-        } else {
-          return acc;
+  // --- Filtering & Sorting ---
+  const filteredExpenses = expenses
+    .filter(e => {
+        if (filterPayer !== 'ALL' && e.payerId !== filterPayer) return false;
+        if (searchTerm && !e.description.toLowerCase().includes(searchTerm.toLowerCase())) return false;
+        return true;
+    })
+    .sort((a, b) => {
+        if (sortBy === 'DATE') {
+            return new Date(b.date).getTime() - new Date(a.date).getTime();
+        } else if (sortBy === 'AMOUNT') {
+            return b.amount - a.amount;
+        } else if (sortBy === 'CATEGORY') {
+            return a.category.localeCompare(b.category);
+        } else if (sortBy === 'PAYER') {
+             const nameA = users.find(u => u.id === a.payerId)?.name || '';
+             const nameB = users.find(u => u.id === b.payerId)?.name || '';
+             return nameA.localeCompare(nameB);
         }
-    }, [] as Expense[]);
+        return 0;
+    });
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-16">
+      
+      {/* Net Position Snapshot (Top Card Requirement) */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-50 flex justify-between items-center">
+              <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                  <Wallet className="w-5 h-5 text-brand-600" />
+                  Net Balances
+              </h3>
+              <span className="text-xs text-slate-400">Live Snapshot</span>
+          </div>
+          <div className="p-5 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+              {users.map(user => {
+                  const bal = balances[user.id] || 0;
+                  const isPositive = bal > 0;
+                  const isZero = Math.abs(bal) < 0.01;
+                  
+                  return (
+                      <div key={user.id} className={`rounded-lg p-3 border ${isZero ? 'border-slate-100 bg-slate-50' : isPositive ? 'border-green-100 bg-green-50' : 'border-red-100 bg-red-50'}`}>
+                          <div className="flex items-center justify-between mb-1">
+                              <span className="text-sm font-semibold text-slate-700 truncate">{user.name}</span>
+                              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white ${isZero ? 'bg-slate-300' : isPositive ? 'bg-green-500' : 'bg-red-500'}`}>
+                                  {user.name.substring(0,1)}
+                              </div>
+                          </div>
+                          <div className={`text-lg font-bold ${isZero ? 'text-slate-400' : isPositive ? 'text-green-700' : 'text-red-700'}`}>
+                              {isZero ? 'Settled' : formatCurrency(bal, currency)}
+                          </div>
+                          <div className="text-[10px] text-slate-500 uppercase tracking-wider font-medium">
+                              {isZero ? '-' : isPositive ? 'Gets Back' : 'Owes'}
+                          </div>
+                      </div>
+                  );
+              })}
+          </div>
+      </div>
+
       {/* Quick Split Widget */}
       <div className="bg-gradient-to-r from-brand-700 to-brand-600 rounded-xl p-5 shadow-lg text-white relative overflow-hidden">
         <div className="absolute top-0 right-0 p-4 opacity-10">
@@ -109,14 +178,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ expenses, users, currency,
         </div>
       </div>
 
-      {/* Stats Row */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {/* Spending Stats Row */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100">
           <div className="flex items-center gap-3 mb-1">
             <div className="p-2 bg-green-100 rounded-lg text-green-600">
-              <Wallet className="w-5 h-5" />
+              <Receipt className="w-5 h-5" />
             </div>
-            <p className="text-slate-500 text-sm font-medium">Total Spending</p>
+            <p className="text-slate-500 text-sm font-medium">Total Spent</p>
           </div>
           <h3 className="text-2xl font-bold text-slate-800 pl-12">{formatCurrency(totalSpent, currency)}</h3>
         </div>
@@ -124,59 +193,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ expenses, users, currency,
         <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100">
           <div className="flex items-center gap-3 mb-1">
             <div className="p-2 bg-blue-100 rounded-lg text-blue-600">
-              <Receipt className="w-5 h-5" />
-            </div>
-            <p className="text-slate-500 text-sm font-medium">Total Bills</p>
-          </div>
-          <h3 className="text-2xl font-bold text-slate-800 pl-12">{billExpenses.length}</h3>
-        </div>
-
-         <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100">
-          <div className="flex items-center gap-3 mb-1">
-            <div className="p-2 bg-amber-100 rounded-lg text-amber-600">
               <TrendingUp className="w-5 h-5" />
             </div>
-            <p className="text-slate-500 text-sm font-medium">Top Payer</p>
+            <p className="text-slate-500 text-sm font-medium">Category Breakdown</p>
           </div>
-          <h3 className="text-2xl font-bold text-slate-800 pl-12">
-            {userSpending.length > 0 ? userSpending[0].name : '—'}
-          </h3>
-        </div>
-      </div>
-
-      {recurringTemplates.length > 0 && (
-        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100">
-            <h3 className="text-lg font-semibold text-slate-800 mb-3 flex items-center gap-2">
-                <RefreshCw className="w-5 h-5 text-brand-600" />
-                Recurring Expenses
-            </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {recurringTemplates.map(template => (
-                    <div key={template.id} className="flex items-center justify-between p-3 border border-slate-200 rounded-lg hover:border-brand-300 transition-colors">
-                        <div>
-                            <p className="font-medium text-slate-800">{template.description}</p>
-                            <p className="text-xs text-slate-500">{formatCurrency(template.amount, currency)} • {users.find(u=>u.id===template.payerId)?.name}</p>
-                        </div>
-                        <Button 
-                            size="sm" 
-                            variant="secondary" 
-                            onClick={() => onQuickAdd(template)}
-                            title="Add for this month"
-                            icon={<Plus className="w-3 h-3" />}
-                        >
-                            Add
-                        </Button>
-                    </div>
-                ))}
-            </div>
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Category Chart */}
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-          <h3 className="text-lg font-semibold text-slate-800 mb-4">Spending by Category</h3>
-          <div className="h-64 w-full">
+          <div className="h-40 w-full">
             {categoryData.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
@@ -184,8 +205,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ expenses, users, currency,
                     data={categoryData}
                     cx="50%"
                     cy="50%"
-                    innerRadius={60}
-                    outerRadius={80}
+                    innerRadius={40}
+                    outerRadius={60}
                     paddingAngle={5}
                     dataKey="value"
                   >
@@ -197,70 +218,202 @@ export const Dashboard: React.FC<DashboardProps> = ({ expenses, users, currency,
                     formatter={(value: number) => formatCurrency(value, currency)}
                     contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
                   />
-                  <Legend verticalAlign="bottom" height={36}/>
+                  <Legend layout="vertical" verticalAlign="middle" align="right" />
                 </PieChart>
               </ResponsiveContainer>
             ) : (
-               <div className="h-full flex items-center justify-center text-slate-400">
-                 No expenses data available
+               <div className="h-full flex items-center justify-center text-slate-400 text-sm">
+                 No data available
                </div>
             )}
           </div>
         </div>
+      </div>
 
-        {/* Recent Activity List */}
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex flex-col">
-          <h3 className="text-lg font-semibold text-slate-800 mb-4">Recent Activity</h3>
-          <div className="flex-1 overflow-auto pr-1 max-h-[300px]">
-            {expenses.length === 0 && (
+      {/* Activity Feed with Sorting & Filtering */}
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex flex-col">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-4">
+             <h3 className="text-lg font-semibold text-slate-800">Recent Activity</h3>
+             
+             {/* Filters */}
+             <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-hide">
+                 <div className="relative flex items-center">
+                     <Search className="w-3 h-3 absolute left-2 text-slate-400" />
+                     <input 
+                        type="text" 
+                        placeholder="Search..." 
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="pl-6 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-md focus:outline-none focus:ring-1 focus:ring-brand-500 w-24 sm:w-auto"
+                     />
+                 </div>
+
+                 <select 
+                    value={filterPayer}
+                    onChange={(e) => setFilterPayer(e.target.value)}
+                    className="text-xs bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                 >
+                     <option value="ALL">All Payers</option>
+                     {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                 </select>
+
+                 <div className="flex items-center bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5">
+                     <ArrowUpDown className="w-3 h-3 text-slate-400 mr-1" />
+                     <select 
+                        value={sortBy}
+                        onChange={(e) => setSortBy(e.target.value as any)}
+                        className="text-xs bg-transparent border-none focus:ring-0 p-0 text-slate-700 font-medium"
+                     >
+                        <option value="DATE">Date</option>
+                        <option value="AMOUNT">Amount</option>
+                        <option value="CATEGORY">Category</option>
+                        <option value="PAYER">Payer</option>
+                     </select>
+                 </div>
+             </div>
+          </div>
+
+          <div className="flex-1 overflow-auto pr-1 max-h-[600px]">
+            {filteredExpenses.length === 0 && (
                  <div className="h-32 flex items-center justify-center text-slate-400">
-                    No activity yet.
+                    No matching activity found.
                  </div>
             )}
             <ul className="space-y-3">
-              {expenses.slice().reverse().slice(0, 10).map((expense) => {
+              {filteredExpenses.map((expense) => {
                   const payer = users.find(u => u.id === expense.payerId);
                   const isSettlement = expense.type === 'SETTLEMENT';
+                  const stats = getConfirmationStats(expense);
+                  
+                  // Determine my status
+                  const myStatus = expense.confirmations?.[currentUser.id] || 'PENDING';
+                  const iAmInvolved = expense.involvedUserIds.includes(currentUser.id);
                   
                   return (
-                    <li key={expense.id} className={`flex items-center justify-between p-3 rounded-lg transition-colors ${isSettlement ? 'bg-slate-100' : 'bg-slate-50 hover:bg-slate-100'}`}>
-                        <div className="flex items-center gap-3">
-                            <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white text-xs font-bold
-                                ${isSettlement ? 'bg-slate-600' :
-                                  expense.category === Category.FOOD ? 'bg-green-500' : 
-                                  expense.category === Category.UTILITIES ? 'bg-blue-500' :
-                                  expense.category === Category.ENTERTAINMENT ? 'bg-purple-500' : 
-                                  expense.category === Category.HOME ? 'bg-orange-500' : 'bg-slate-400'
-                                }`}>
-                                {isSettlement ? <ArrowRightLeft className="w-5 h-5" /> : expense.category.substring(0, 2).toUpperCase()}
-                            </div>
-                            <div>
-                                <div className="flex items-center gap-2">
-                                    <p className="text-sm font-medium text-slate-800">
-                                        {isSettlement ? `Payment to ${users.find(u => expense.involvedUserIds.includes(u.id))?.name}` : expense.description}
-                                    </p>
-                                    {expense.isRecurring && <RefreshCw className="w-3 h-3 text-slate-400" />}
+                    <li 
+                      key={expense.id} 
+                      onClick={() => onExpenseClick(expense)}
+                      className={`flex flex-col p-3 rounded-lg transition-all border cursor-pointer group
+                        ${isSettlement ? 'bg-slate-50 hover:bg-slate-100 border-transparent' : 'bg-white shadow-sm border-slate-100 hover:border-brand-200 hover:shadow-md'}
+                      `}
+                    >
+                        <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-3">
+                                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0 shadow-sm transition-transform group-hover:scale-105
+                                    ${isSettlement ? 'bg-slate-600' :
+                                      expense.category === Category.FOOD ? 'bg-green-500' : 
+                                      expense.category === Category.UTILITIES ? 'bg-blue-500' :
+                                      expense.category === Category.ENTERTAINMENT ? 'bg-purple-500' : 
+                                      expense.category === Category.HOME ? 'bg-orange-500' : 'bg-slate-400'
+                                    }`}>
+                                    {isSettlement ? <ArrowRightLeft className="w-5 h-5" /> : expense.category.substring(0, 2).toUpperCase()}
                                 </div>
-                                <p className="text-xs text-slate-500">{payer?.name} • {expense.date}</p>
+                                <div className="min-w-0">
+                                    <div className="flex items-center gap-2">
+                                        <p className="text-sm font-medium text-slate-800 truncate group-hover:text-brand-700 transition-colors">
+                                            {isSettlement ? `Payment to ${users.find(u => expense.involvedUserIds.includes(u.id))?.name}` : expense.description}
+                                        </p>
+                                        {expense.isRecurring && <RefreshCw className="w-3 h-3 text-slate-400 shrink-0" />}
+                                        {expense.audit?.voiceNoteAttached && <Mic className="w-3 h-3 text-blue-400 shrink-0" />}
+                                        {expense.receiptImageUrl && <Paperclip className="w-3 h-3 text-slate-400 shrink-0" />}
+                                    </div>
+                                    <div className="flex items-center gap-1 text-xs text-slate-500">
+                                        <span className="font-medium text-brand-600">{payer?.name}</span>
+                                        <span>•</span>
+                                        <span>{expense.date}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="text-right shrink-0 ml-2">
+                                 <span className={`block font-bold ${isSettlement ? 'text-slate-600' : 'text-slate-800'}`}>
+                                    {formatCurrency(expense.amount, currency)}
+                                 </span>
                             </div>
                         </div>
-                        <div className="text-right">
-                             <span className={`block font-semibold ${isSettlement ? 'text-slate-600' : 'text-slate-700'}`}>
-                                {formatCurrency(expense.amount, currency)}
-                             </span>
-                             {!isSettlement && (
-                                <span className="text-[10px] text-slate-400">
-                                    {expense.involvedUserIds.length === users.length ? 'All' : `${expense.involvedUserIds.length} ppl`}
-                                </span>
-                             )}
-                        </div>
+                        
+                        {/* Audit / Confirmation Bar */}
+                        {!isSettlement && stats && (
+                            <div className="flex items-center justify-between mt-1 pl-14 border-t border-slate-50 pt-2">
+                                <div className="flex items-center gap-2">
+                                    {stats.flagged > 0 && (
+                                        <span className="flex items-center gap-1 text-[10px] text-red-500 font-medium bg-red-50 px-1.5 py-0.5 rounded">
+                                            <Flag className="w-3 h-3" /> {stats.flagged}
+                                        </span>
+                                    )}
+                                    {/* Progress bar */}
+                                    <div className="flex items-center gap-1">
+                                        <div className="w-16 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                                            <div 
+                                                className="h-full bg-green-500" 
+                                                style={{ width: `${(stats.confirmed / stats.total) * 100}%` }}
+                                            />
+                                        </div>
+                                        <span className="text-[10px] text-slate-400">
+                                            {stats.confirmed}/{stats.total}
+                                        </span>
+                                    </div>
+                                </div>
+
+                                {/* My Actions (Stop propagation to avoid opening details when clicking buttons) */}
+                                {iAmInvolved && (
+                                    <div className="flex gap-2" onClick={e => e.stopPropagation()}>
+                                        {myStatus === 'PENDING' && (
+                                            <>
+                                                <button 
+                                                    onClick={() => onToggleConfirmation(expense.id, 'CONFIRMED')}
+                                                    className="text-[10px] bg-green-50 text-green-700 px-2 py-1 rounded hover:bg-green-100 border border-green-200 flex items-center gap-1 transition-colors"
+                                                >
+                                                    <CheckCircle2 className="w-3 h-3" /> Confirm
+                                                </button>
+                                                <button 
+                                                     onClick={() => onToggleConfirmation(expense.id, 'FLAGGED')}
+                                                    className="text-[10px] bg-red-50 text-red-600 px-2 py-1 rounded hover:bg-red-100 border border-red-200 flex items-center gap-1 transition-colors"
+                                                >
+                                                    <AlertCircle className="w-3 h-3" /> Flag
+                                                </button>
+                                            </>
+                                        )}
+                                        {myStatus === 'CONFIRMED' && (
+                                             <span className="text-[10px] text-green-600 font-medium flex items-center gap-1 bg-green-50 px-2 py-0.5 rounded-full">
+                                                <CheckCircle2 className="w-3 h-3" /> Confirmed
+                                             </span>
+                                        )}
+                                        {myStatus === 'FLAGGED' && (
+                                             <span className="text-[10px] text-red-600 font-medium flex items-center gap-1 bg-red-50 px-2 py-0.5 rounded-full">
+                                                <Flag className="w-3 h-3" /> Flagged
+                                             </span>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </li>
                   );
               })}
             </ul>
           </div>
-        </div>
       </div>
+
+      {/* Floating Action Button for Quick Add */}
+      <div className="fixed bottom-6 right-6 z-40 md:hidden">
+        <button
+            onClick={onOpenQuickAddModal}
+            className="bg-brand-600 text-white p-4 rounded-full shadow-lg hover:bg-brand-700 active:scale-95 transition-all focus:outline-none focus:ring-4 focus:ring-brand-300"
+            aria-label="Quick Add Expense"
+        >
+            <Zap className="w-7 h-7 fill-yellow-300 text-yellow-300" />
+        </button>
+      </div>
+      
+      {/* Desktop FAB equivalent */}
+      <div className="hidden md:block fixed bottom-8 right-8 z-40">
+         <Button onClick={onOpenQuickAddModal} size="lg" className="rounded-full shadow-xl pl-4 pr-6 py-4 h-auto" icon={<Zap className="w-5 h-5 fill-yellow-300 text-yellow-300" />}>
+            Quick Add
+         </Button>
+      </div>
+
+      {/* Receipt Viewer Removed (handled in DetailModal now) */}
+
     </div>
   );
 };

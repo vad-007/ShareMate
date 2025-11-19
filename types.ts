@@ -1,3 +1,4 @@
+
 export enum Category {
   FOOD = 'Food',
   UTILITIES = 'Utilities',
@@ -11,12 +12,30 @@ export enum Category {
 
 export type ExpenseType = 'BILL' | 'SETTLEMENT';
 export type SplitType = 'EQUAL' | 'CUSTOM';
+export type ConfirmationStatus = 'PENDING' | 'CONFIRMED' | 'FLAGGED';
+export type UserRole = 'ADMIN' | 'MEMBER';
+
+export interface Group {
+  id: string;
+  name: string;
+  currency: string;
+  timezone?: string;
+  createdBy: string;
+  createdAt: string;
+  notificationPrefs?: {
+    push: boolean;
+    email: boolean;
+    sms: boolean;
+  };
+}
 
 export interface User {
   id: string;
   name: string;
-  email?: string; // Added for future use
+  email?: string; 
   avatarUrl?: string;
+  role?: UserRole;
+  isActive?: boolean; // For soft delete
 }
 
 export interface Expense {
@@ -27,11 +46,21 @@ export interface Expense {
   date: string;
   category: Category;
   items?: string[];
-  involvedUserIds: string[]; // IDs of users sharing this expense
+  involvedUserIds: string[]; 
   isRecurring: boolean;
-  type?: ExpenseType; // BILL or SETTLEMENT
+  type?: ExpenseType; 
   splitType?: SplitType;
-  splitDetails?: { [userId: string]: number }; // Optional: Map userId to specific amount
+  splitDetails?: { [userId: string]: number }; 
+  receiptImageUrl?: string; // Base64 data for MVP
+  
+  // Audit & Confirmation Fields
+  confirmations?: { [userId: string]: ConfirmationStatus };
+  audit?: {
+    createdBy: string; 
+    createdAt: string; 
+    deviceId?: string; 
+    voiceNoteAttached?: boolean; 
+  };
 }
 
 export interface Transaction {

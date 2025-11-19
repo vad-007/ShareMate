@@ -1,15 +1,18 @@
+
 import React, { useState, useMemo, useEffect } from 'react';
 import { Home, PlusCircle, Users, Banknote, Menu, X, Settings, LogOut } from 'lucide-react';
-import { User, Expense, Category, Transaction } from './types';
+import { User, Expense, Category, Transaction, ConfirmationStatus, Group } from './types';
 import { Dashboard } from './components/Dashboard';
 import { ExpenseForm } from './components/ExpenseForm';
 import { SettlementPlan } from './components/SettlementPlan';
 import { GroupSettings } from './components/GroupSettings';
 import { Onboarding } from './components/Onboarding';
 import { Toast, ToastType } from './components/Toast';
+import { QuickAddModal } from './components/QuickAddModal';
+import { ExpenseDetailModal } from './components/ExpenseDetailModal';
 import { calculateSettlements, generateWhatsAppLink } from './utils/calculations';
 
-// Initial Data (for demo purposes if local storage is empty AND bypassed)
+// Initial Data
 const INITIAL_USERS_DEFAULT: User[] = [];
 const INITIAL_EXPENSES_DEFAULT: Expense[] = [];
 
@@ -27,6 +30,11 @@ function App() {
     return saved ? JSON.parse(saved) : null;
   });
 
+  const [group, setGroup] = useState<Group | null>(() => {
+    const saved = localStorage.getItem('sharemates_group');
+    return saved ? JSON.parse(saved) : null;
+  });
+
   const [users, setUsers] = useState<User[]>(() => {
     const saved = localStorage.getItem('sharemates_users');
     return saved ? JSON.parse(saved) : INITIAL_USERS_DEFAULT;
@@ -39,7 +47,11 @@ function App() {
 
   const [currentView, setCurrentView] = useState<View>(View.DASHBOARD);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [currency, setCurrency] = useState('INR');
+  const [isQuickAddOpen, setIsQuickAddOpen] = useState(false);
+  
+  // Modal States
+  const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null);
+  const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   
   // Toast State
   const [toast, setToast] = useState<{ msg: string; type: ToastType; visible: boolean; action?: { label: string; onClick: () => void } }>({
@@ -63,23 +75,39 @@ function App() {
     }
   }, [currentUser]);
 
+  useEffect(() => {
+    if (group) {
+        localStorage.setItem('sharemates_group', JSON.stringify(group));
+    } else {
+        localStorage.removeItem('sharemates_group');
+    }
+  }, [group]);
+
   // --- Calculations ---
   const transactions = useMemo(() => calculateSettlements(expenses, users), [expenses, users]);
   const hasDebts = transactions.length > 0;
+
+  // --- Helpers ---
+  const createInitialConfirmations = (involvedIds: string[], payerId: string): { [userId: string]: ConfirmationStatus } => {
+      const confs: { [userId: string]: ConfirmationStatus } = {};
+      involvedIds.forEach(id => {
+          confs[id] = id === payerId ? 'CONFIRMED' : 'PENDING';
+      });
+      return confs;
+  };
 
   // --- Handlers ---
   const showToast = (msg: string, type: ToastType = 'success', action?: { label: string; onClick: () => void }) => {
     setToast({ msg, type, visible: true, action });
   };
 
-  const triggerNotificationSimulation = (expense: Expense) => {
-      // Simulate sending push notifications
-      showToast("Sending notifications to group...", 'info');
+  const triggerNotificationSimulation = (expense: Expense, involvedCount: number) => {
+      showToast(`Notifying ${involvedCount} members...`, 'info');
       
       setTimeout(() => {
-          const link = generateWhatsAppLink(expense, currency);
+          const link = generateWhatsAppLink(expense, group?.currency || 'INR');
           showToast(
-            "Expense added & members notified!", 
+            "Expense saved! Notifications sent.", 
             'success', 
             { 
                 label: "Share on WhatsApp", 
@@ -89,20 +117,31 @@ function App() {
       }, 1500);
   };
 
-  const handleOnboardingComplete = (userName: string, groupName: string) => {
+  const handleOnboardingComplete = (userName: string, groupName: string, currency: string) => {
       const newMe: User = {
           id: `u-${Date.now()}`,
           name: userName,
-          avatarUrl: ''
+          avatarUrl: '',
+          role: 'ADMIN',
+          isActive: true
       };
-      setCurrentUser(newMe);
       
-      // Initialize group with just me if empty
+      const newGroup: Group = {
+          id: `g-${Date.now()}`,
+          name: groupName,
+          currency: currency,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          createdBy: newMe.id,
+          createdAt: new Date().toISOString(),
+          notificationPrefs: { push: true, email: true, sms: false }
+      };
+
+      setCurrentUser(newMe);
+      setGroup(newGroup);
+      
       if (users.length === 0) {
           setUsers([newMe]);
       } else {
-          // If users exist (re-login scenario without clear), just add me if not there
-          // For this MVP, we assume new onboarding = new start or just appending self
           setUsers(prev => [...prev, newMe]);
       }
       showToast(`Welcome, ${userName}! Group '${groupName}' created.`);
@@ -111,35 +150,102 @@ function App() {
   const handleLogout = () => {
       if(confirm("Are you sure you want to logout? This is a local demo.")) {
           setCurrentUser(null);
-          // Optional: clear data? For now, keep data for persistence demo
           setCurrentView(View.DASHBOARD);
       }
   };
 
-  const handleAddExpense = (data: Omit<Expense, 'id'>) => {
-    const newExpense: Expense = {
-      ...data,
-      id: Math.random().toString(36).substring(2, 9),
-    };
-    setExpenses(prev => [...prev, newExpense]);
-    setCurrentView(View.DASHBOARD);
-    triggerNotificationSimulation(newExpense);
+  // Generic handler for creating OR updating expense from standard form
+  const handleExpenseFormSubmit = (data: any) => {
+    if (!currentUser) return;
+
+    if (editingExpense) {
+        // Update Existing
+        const updatedExpense: Expense = {
+            ...editingExpense,
+            ...data,
+            // Preserve confirmations if not changed significantly, or reset? 
+            // For MVP, let's reset confirmations if amount/splits change, but keeping simple:
+            confirmations: createInitialConfirmations(data.involvedUserIds, data.payerId) 
+        };
+
+        setExpenses(prev => prev.map(e => e.id === editingExpense.id ? updatedExpense : e));
+        showToast("Expense updated successfully");
+        setEditingExpense(null); // Close edit mode
+        setSelectedExpense(updatedExpense); // Re-open details with new data
+    } else {
+        // Create New
+        const newExpense: Expense = {
+          ...data,
+          id: Math.random().toString(36).substring(2, 9),
+          audit: {
+             createdBy: currentUser.id,
+             createdAt: new Date().toISOString(),
+             voiceNoteAttached: false
+          },
+          confirmations: createInitialConfirmations(data.involvedUserIds, data.payerId)
+        };
+        setExpenses(prev => [...prev, newExpense]);
+        setCurrentView(View.DASHBOARD);
+        triggerNotificationSimulation(newExpense, newExpense.involvedUserIds.length - 1);
+    }
   };
 
-  const handleQuickAddTemplate = (template: Expense) => {
-    const newExpense: Expense = {
-        ...template,
-        id: Math.random().toString(36).substring(2, 9),
-        date: new Date().toISOString().split('T')[0], // Set to today
-        isRecurring: true
-    };
-    setExpenses(prev => [...prev, newExpense]);
-    triggerNotificationSimulation(newExpense);
+  const handleSaveQuickAdd = (data: Partial<Expense>, notify: boolean) => {
+      if (!currentUser || !data.amount || !data.description || !data.payerId) return;
+      
+      const involved = data.involvedUserIds || users.filter(u => u.isActive !== false).map(u => u.id);
+      const newExpense: Expense = {
+          id: `qa-${Date.now()}`,
+          description: data.description,
+          amount: data.amount,
+          payerId: data.payerId,
+          date: data.date || new Date().toISOString().split('T')[0],
+          category: data.category || Category.OTHER,
+          involvedUserIds: involved,
+          isRecurring: false,
+          type: 'BILL',
+          splitType: 'EQUAL',
+          audit: {
+             createdBy: currentUser.id,
+             createdAt: new Date().toISOString(),
+             voiceNoteAttached: data.audit?.voiceNoteAttached
+          },
+          confirmations: createInitialConfirmations(involved, data.payerId)
+      };
+
+      setExpenses(prev => [...prev, newExpense]);
+      setIsQuickAddOpen(false);
+      
+      if (notify) {
+          triggerNotificationSimulation(newExpense, involved.length - (involved.includes(newExpense.payerId) ? 1 : 0));
+      } else {
+          showToast("Quick Add saved successfully.");
+      }
+  };
+
+  const handleDeleteExpense = (expenseId: string) => {
+      setExpenses(prev => prev.filter(e => e.id !== expenseId));
+      showToast("Expense deleted.");
+      setSelectedExpense(null);
+  };
+
+  const handleToggleConfirmation = (expenseId: string, status: ConfirmationStatus) => {
+      if (!currentUser) return;
+      setExpenses(prev => prev.map(e => {
+          if (e.id === expenseId) {
+              const newConfs = { ...e.confirmations, [currentUser.id]: status };
+              return { ...e, confirmations: newConfs };
+          }
+          return e;
+      }));
+      
+      if (status === 'FLAGGED') showToast("Expense flagged for review.", 'error');
+      if (status === 'CONFIRMED') showToast("Expense confirmed!", 'success');
   };
 
   const handleQuickSplit = (description: string, amount: number) => {
       if (!currentUser) return;
-      
+      const involved = users.filter(u => u.isActive !== false).map(u => u.id);
       const newExpense: Expense = {
           id: `q-${Date.now()}`,
           description,
@@ -147,18 +253,42 @@ function App() {
           payerId: currentUser.id,
           date: new Date().toISOString().split('T')[0],
           category: Category.OTHER,
-          involvedUserIds: users.map(u => u.id), // Split with everyone
+          involvedUserIds: involved,
           isRecurring: false,
           type: 'BILL',
-          splitType: 'EQUAL'
+          splitType: 'EQUAL',
+          audit: {
+              createdBy: currentUser.id,
+              createdAt: new Date().toISOString()
+          },
+          confirmations: createInitialConfirmations(involved, currentUser.id)
       };
-      
       setExpenses(prev => [...prev, newExpense]);
-      triggerNotificationSimulation(newExpense);
+      triggerNotificationSimulation(newExpense, involved.length - 1);
+  };
+
+  const handleQuickAddTemplate = (template: Expense) => {
+      if (!currentUser) return;
+      const newExpense: Expense = {
+          ...template,
+          id: Math.random().toString(36).substring(2, 9),
+          date: new Date().toISOString().split('T')[0],
+          isRecurring: true,
+          audit: {
+              createdBy: currentUser.id,
+              createdAt: new Date().toISOString()
+          },
+          confirmations: createInitialConfirmations(template.involvedUserIds, template.payerId)
+      };
+      setExpenses(prev => [...prev, newExpense]);
+      triggerNotificationSimulation(newExpense, newExpense.involvedUserIds.length - 1);
   };
 
   const handleSettleTransaction = (txn: Transaction) => {
-      if (!window.confirm(`Record payment of ${currency === 'INR' ? '₹' : currency} ${txn.amount} from ${users.find(u=>u.id===txn.fromUserId)?.name} to ${users.find(u=>u.id===txn.toUserId)?.name}?`)) {
+      if (!currentUser) return;
+      const symbol = group?.currency === 'INR' ? '₹' : group?.currency || '$';
+      
+      if (!window.confirm(`Record payment of ${symbol} ${txn.amount} from ${users.find(u=>u.id===txn.fromUserId)?.name} to ${users.find(u=>u.id===txn.toUserId)?.name}?`)) {
           return;
       }
       
@@ -171,7 +301,11 @@ function App() {
           date: new Date().toISOString().split('T')[0],
           category: Category.SETTLEMENT,
           isRecurring: false,
-          type: 'SETTLEMENT'
+          type: 'SETTLEMENT',
+          audit: {
+              createdBy: currentUser.id,
+              createdAt: new Date().toISOString()
+          }
       };
 
       setExpenses(prev => [...prev, settlementExpense]);
@@ -181,20 +315,43 @@ function App() {
   const handleAddUser = (name: string) => {
     const newUser: User = {
       id: `u${Date.now()}`,
-      name
+      name,
+      role: 'MEMBER',
+      isActive: true
     };
     setUsers(prev => [...prev, newUser]);
     showToast(`${name} added to group`);
   };
 
   const handleRemoveUser = (id: string) => {
-    const isInvolved = expenses.some(e => e.payerId === id || e.involvedUserIds.includes(id));
-    if (isInvolved) {
-        showToast("Cannot remove user with active history", 'error');
-        return;
-    }
-    setUsers(prev => prev.filter(u => u.id !== id));
-    showToast("User removed");
+    setUsers(prev => prev.map(u => u.id === id ? { ...u, isActive: false } : u));
+    showToast("User deactivated (History preserved)");
+  };
+  
+  const handleReactivateUser = (id: string) => {
+    setUsers(prev => prev.map(u => u.id === id ? { ...u, isActive: true } : u));
+    showToast("User reactivated");
+  }
+
+  const handleUpdateGroup = (updates: Partial<Group>) => {
+      if (!group) return;
+      setGroup({ ...group, ...updates });
+  };
+
+  const handleDeleteGroup = () => {
+      localStorage.clear();
+      setGroup(null);
+      setCurrentUser(null);
+      setUsers([]);
+      setExpenses([]);
+      window.location.reload();
+  };
+
+  const handleToggleRecurring = (expenseId: string) => {
+      setExpenses(prev => prev.map(e => 
+          e.id === expenseId ? { ...e, isRecurring: !e.isRecurring } : e
+      ));
+      showToast("Recurrence updated");
   };
 
   const NavItem = ({ view, icon, label }: { view: View, icon: React.ReactNode, label: string }) => (
@@ -211,8 +368,7 @@ function App() {
     </button>
   );
 
-  // --- Render Onboarding if not logged in ---
-  if (!currentUser) {
+  if (!currentUser || !group) {
       return (
           <>
             <Onboarding onComplete={handleOnboardingComplete} />
@@ -230,7 +386,7 @@ function App() {
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-20">
       {/* Navigation Bar */}
-      <nav className="bg-white shadow-sm sticky top-0 z-50">
+      <nav className="bg-white shadow-sm sticky top-0 z-40">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
             <div className="flex items-center">
@@ -238,7 +394,10 @@ function App() {
                 <div className="bg-brand-600 p-1.5 rounded-lg">
                     <Users className="h-6 w-6 text-white" />
                 </div>
-                <span className="font-bold text-xl text-brand-900 tracking-tight">ShareMates</span>
+                <div className="flex flex-col leading-tight">
+                    <span className="font-bold text-lg text-brand-900 tracking-tight">ShareMates</span>
+                    <span className="text-xs text-slate-500 font-medium">{group.name}</span>
+                </div>
               </div>
             </div>
             
@@ -305,19 +464,6 @@ function App() {
                <p className="text-slate-500 mt-1">Hi {currentUser.name}! {hasDebts ? 'There are pending debts.' : 'You are all settled up.'}</p>
              )}
            </div>
-           
-           {currentView === View.DASHBOARD && (
-             <select 
-                value={currency} 
-                onChange={(e) => setCurrency(e.target.value)}
-                className="bg-white border border-slate-300 text-slate-700 text-sm rounded-lg focus:ring-brand-500 focus:border-brand-500 block p-2"
-             >
-                <option value="INR">INR (₹)</option>
-                <option value="USD">USD ($)</option>
-                <option value="EUR">EUR (€)</option>
-                <option value="GBP">GBP (£)</option>
-             </select>
-           )}
         </div>
 
         {/* Views */}
@@ -325,9 +471,13 @@ function App() {
           <Dashboard 
             expenses={expenses} 
             users={users} 
-            currency={currency} 
-            onQuickAdd={handleQuickAddTemplate}
+            currentUser={currentUser}
+            currency={group.currency} 
+            onQuickAddTemplate={handleQuickAddTemplate}
             onQuickSplit={handleQuickSplit}
+            onOpenQuickAddModal={() => setIsQuickAddOpen(true)}
+            onToggleConfirmation={handleToggleConfirmation}
+            onExpenseClick={(expense) => setSelectedExpense(expense)}
           />
         )}
 
@@ -336,7 +486,7 @@ function App() {
               <ExpenseForm 
                 users={users} 
                 currentUser={currentUser}
-                onAddExpense={handleAddExpense}
+                onSubmit={handleExpenseFormSubmit}
                 onCancel={() => setCurrentView(View.DASHBOARD)} 
               />
            </div>
@@ -348,7 +498,7 @@ function App() {
                     transactions={transactions} 
                     users={users} 
                     expenses={expenses}
-                    currency={currency}
+                    currency={group.currency}
                     onSettleTransaction={handleSettleTransaction} 
                 />
             </div>
@@ -356,12 +506,53 @@ function App() {
 
         {currentView === View.GROUP && (
             <GroupSettings 
-              users={users} 
+              users={users}
+              group={group}
+              expenses={expenses}
               onAddUser={handleAddUser} 
-              onRemoveUser={handleRemoveUser} 
+              onRemoveUser={handleRemoveUser}
+              onReactivateUser={handleReactivateUser}
+              onUpdateGroup={handleUpdateGroup}
+              onDeleteGroup={handleDeleteGroup}
+              onToggleRecurring={handleToggleRecurring}
             />
         )}
       </main>
+
+      {/* Modals */}
+      {isQuickAddOpen && (
+          <QuickAddModal 
+            users={users}
+            currentUser={currentUser}
+            onClose={() => setIsQuickAddOpen(false)}
+            onSave={handleSaveQuickAdd}
+            currency={group.currency}
+          />
+      )}
+      
+      {selectedExpense && !editingExpense && (
+          <ExpenseDetailModal
+            expense={selectedExpense}
+            users={users}
+            currency={group.currency}
+            currentUser={currentUser}
+            onClose={() => setSelectedExpense(null)}
+            onEdit={(exp) => setEditingExpense(exp)}
+            onDelete={handleDeleteExpense}
+          />
+      )}
+
+      {editingExpense && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+             <ExpenseForm 
+                 users={users}
+                 currentUser={currentUser}
+                 initialData={editingExpense}
+                 onSubmit={handleExpenseFormSubmit}
+                 onCancel={() => setEditingExpense(null)}
+             />
+          </div>
+      )}
 
       <Toast 
         message={toast.msg} 

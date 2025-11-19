@@ -1,11 +1,10 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { ReceiptData, Category } from '../types';
 
 const parseReceiptImage = async (base64Image: string): Promise<ReceiptData> => {
-  if (!process.env.API_KEY) {
-    throw new Error("API Key is missing");
-  }
-
+  // The API key must be obtained exclusively from the environment variable process.env.API_KEY.
+  // We assume this variable is pre-configured, valid, and accessible.
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   try {

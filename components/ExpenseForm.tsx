@@ -1,44 +1,80 @@
+
 import React, { useState, useRef, useEffect } from 'react';
-import { Camera, Plus, X, Loader2, Check, RefreshCw, Divide, Hash } from 'lucide-react';
-import { Category, User, SplitType } from '../types';
+import { Camera, Plus, X, Loader2, Check, RefreshCw, Divide, Hash, Scale, Save } from 'lucide-react';
+import { Category, User, SplitType, Expense } from '../types';
 import { Button } from './Button';
 import { geminiService } from '../services/geminiService';
 
 interface ExpenseFormProps {
   users: User[];
   currentUser?: User;
-  onAddExpense: (data: any) => void;
+  initialData?: Expense; // Optional data for editing
+  onSubmit: (data: any) => void; // Generic submit handler
   onCancel: () => void;
 }
 
-export const ExpenseForm: React.FC<ExpenseFormProps> = ({ users, currentUser, onAddExpense, onCancel }) => {
-  const [description, setDescription] = useState('');
-  const [amount, setAmount] = useState('');
-  const [payerId, setPayerId] = useState(currentUser?.id || users[0]?.id || '');
-  const [category, setCategory] = useState<Category>(Category.FOOD);
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+type FormSplitType = SplitType | 'SHARES';
+
+export const ExpenseForm: React.FC<ExpenseFormProps> = ({ users, currentUser, initialData, onSubmit, onCancel }) => {
+  // Filter for Active Users Only (unless editing an expense involving inactive users, ideally handled by keeping IDs)
+  const activeUsers = users.filter(u => u.isActive !== false);
+  
+  // --- State Initialization ---
+  const [description, setDescription] = useState(initialData?.description || '');
+  const [amount, setAmount] = useState(initialData?.amount.toString() || '');
+  const [payerId, setPayerId] = useState(initialData?.payerId || currentUser?.id || activeUsers[0]?.id || '');
+  const [category, setCategory] = useState<Category>(initialData?.category || Category.FOOD);
+  const [date, setDate] = useState(initialData?.date || new Date().toISOString().split('T')[0]);
+  const [isRecurring, setIsRecurring] = useState(initialData?.isRecurring || false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(initialData?.receiptImageUrl || null);
+  
   const [isProcessing, setIsProcessing] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   
   // Split State
   const [involvedUserIds, setInvolvedUserIds] = useState<string[]>([]);
-  const [splitType, setSplitType] = useState<SplitType>('EQUAL');
+  const [splitMode, setSplitMode] = useState<FormSplitType>('EQUAL');
   const [customAmounts, setCustomAmounts] = useState<{ [userId: string]: string }>({});
+  const [userShares, setUserShares] = useState<{ [userId: string]: number }>({});
   
-  const [isRecurring, setIsRecurring] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const descInputRef = useRef<HTMLInputElement>(null);
 
+  // --- Effect: Initialize Splits based on Initial Data or Defaults ---
   useEffect(() => {
-    // Default to all users involved
-    setInvolvedUserIds(users.map(u => u.id));
-    // Autofocus
-    if(descInputRef.current) descInputRef.current.focus();
-  }, [users]);
+    if (initialData) {
+        // Edit Mode Initialization
+        setInvolvedUserIds(initialData.involvedUserIds);
+        
+        if (initialData.splitType === 'CUSTOM' && initialData.splitDetails) {
+            setSplitMode('CUSTOM');
+            const stringAmounts: {[key: string]: string} = {};
+            Object.entries(initialData.splitDetails).forEach(([uid, amt]) => {
+                stringAmounts[uid] = amt.toString();
+            });
+            setCustomAmounts(stringAmounts);
+        } else {
+            setSplitMode('EQUAL');
+        }
+    } else {
+        // Add Mode Initialization
+        // Default to all active users involved
+        const allIds = activeUsers.map(u => u.id);
+        setInvolvedUserIds(allIds);
+        
+        const initialShares: {[key: string]: number} = {};
+        allIds.forEach(id => initialShares[id] = 1);
+        setUserShares(initialShares);
+    }
+    
+    // Focus description only on Add mode
+    if (!initialData && descInputRef.current) {
+        descInputRef.current.focus();
+    }
+  }, [initialData]); // Run once when component mounts or initialData changes
 
-  // Initialize custom amounts when switching to custom split
+  // Initialize custom amounts when switching to custom split (if not already set)
   useEffect(() => {
-    if (splitType === 'CUSTOM' && amount) {
+    if (splitMode === 'CUSTOM' && amount && Object.keys(customAmounts).length === 0) {
       const total = parseFloat(amount);
       if (!isNaN(total)) {
         const count = involvedUserIds.length;
@@ -47,12 +83,10 @@ export const ExpenseForm: React.FC<ExpenseFormProps> = ({ users, currentUser, on
         involvedUserIds.forEach(id => {
             initialSplits[id] = split;
         });
-        // Adjust last one to match total exactly if needed? 
-        // For now, let user adjust manually.
         setCustomAmounts(initialSplits);
       }
     }
-  }, [splitType, amount, involvedUserIds]);
+  }, [splitMode, amount, involvedUserIds]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -108,10 +142,28 @@ export const ExpenseForm: React.FC<ExpenseFormProps> = ({ users, currentUser, on
       setCustomAmounts(prev => ({ ...prev, [userId]: val }));
   };
 
+  const handleShareChange = (userId: string, change: number) => {
+      setUserShares(prev => ({
+          ...prev,
+          [userId]: Math.max(0, (prev[userId] || 0) + change)
+      }));
+  };
+
   const getCustomTotal = () => {
       return Object.entries(customAmounts)
         .filter(([id]) => involvedUserIds.includes(id))
-        .reduce((sum, [_, val]) => sum + (parseFloat(val) || 0), 0);
+        .reduce((sum, [_, val]) => sum + (parseFloat(val as string) || 0), 0);
+  };
+
+  const getTotalShares = () => {
+      return involvedUserIds.reduce((sum, id) => sum + (userShares[id] || 0), 0);
+  };
+
+  const getShareAmount = (userId: string) => {
+      const totalAmount = parseFloat(amount) || 0;
+      const totalShares = getTotalShares();
+      if (totalShares === 0) return 0;
+      return (totalAmount * ((userShares[userId] || 0) / totalShares));
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -120,8 +172,9 @@ export const ExpenseForm: React.FC<ExpenseFormProps> = ({ users, currentUser, on
 
     const numAmount = parseFloat(amount);
     let finalSplitDetails: { [key: string]: number } | undefined = undefined;
+    let finalSplitType: SplitType = 'EQUAL';
 
-    if (splitType === 'CUSTOM') {
+    if (splitMode === 'CUSTOM') {
         const currentTotal = getCustomTotal();
         if (Math.abs(currentTotal - numAmount) > 0.05) {
             alert(`Custom splits total (${currentTotal.toFixed(2)}) must match expense amount (${numAmount.toFixed(2)})`);
@@ -131,9 +184,22 @@ export const ExpenseForm: React.FC<ExpenseFormProps> = ({ users, currentUser, on
         involvedUserIds.forEach(id => {
             finalSplitDetails![id] = parseFloat(customAmounts[id]) || 0;
         });
+        finalSplitType = 'CUSTOM';
+    } else if (splitMode === 'SHARES') {
+        const totalShares = getTotalShares();
+        if (totalShares === 0) {
+            alert("Total shares cannot be zero.");
+            return;
+        }
+        finalSplitDetails = {};
+        involvedUserIds.forEach(id => {
+             // Calculate exact share
+             finalSplitDetails![id] = (numAmount * ((userShares[id] || 0) / totalShares));
+        });
+        finalSplitType = 'CUSTOM'; // We save as custom amounts for precision
     }
 
-    onAddExpense({
+    const formData = {
       description,
       amount: numAmount,
       payerId,
@@ -143,15 +209,20 @@ export const ExpenseForm: React.FC<ExpenseFormProps> = ({ users, currentUser, on
       isRecurring,
       items: [],
       type: 'BILL',
-      splitType,
-      splitDetails: finalSplitDetails
-    });
+      splitType: finalSplitType,
+      splitDetails: finalSplitDetails,
+      receiptImageUrl: previewUrl
+    };
+
+    onSubmit(formData);
   };
 
   return (
     <div className="bg-white rounded-xl shadow-xl overflow-hidden max-w-lg w-full mx-auto my-4" role="dialog" aria-labelledby="add-expense-title">
       <div className="bg-brand-600 px-6 py-4 flex justify-between items-center">
-        <h2 id="add-expense-title" className="text-white text-lg font-semibold">Add New Expense</h2>
+        <h2 id="add-expense-title" className="text-white text-lg font-semibold">
+            {initialData ? 'Edit Expense' : 'Add New Expense'}
+        </h2>
         <button onClick={onCancel} className="text-brand-100 hover:text-white" aria-label="Close">
           <X className="w-6 h-6" />
         </button>
@@ -282,27 +353,34 @@ export const ExpenseForm: React.FC<ExpenseFormProps> = ({ users, currentUser, on
           <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
              <div className="flex justify-between items-center mb-3">
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide">Split Method</label>
-                <div className="flex bg-white rounded-lg p-1 border border-slate-200 shadow-sm">
+                <div className="flex bg-white rounded-lg p-1 border border-slate-200 shadow-sm overflow-hidden">
                     <button
                         type="button"
-                        onClick={() => setSplitType('EQUAL')}
-                        className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${splitType === 'EQUAL' ? 'bg-brand-100 text-brand-700' : 'text-slate-500 hover:bg-slate-50'}`}
+                        onClick={() => setSplitMode('EQUAL')}
+                        className={`flex-1 px-3 py-1 text-[10px] sm:text-xs font-medium rounded-md transition-colors ${splitMode === 'EQUAL' ? 'bg-brand-100 text-brand-700 shadow-sm' : 'text-slate-500 hover:bg-slate-50'}`}
                     >
                         Equally
                     </button>
                     <button
                         type="button"
-                        onClick={() => setSplitType('CUSTOM')}
-                        className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${splitType === 'CUSTOM' ? 'bg-brand-100 text-brand-700' : 'text-slate-500 hover:bg-slate-50'}`}
+                        onClick={() => setSplitMode('SHARES')}
+                        className={`flex-1 px-3 py-1 text-[10px] sm:text-xs font-medium rounded-md transition-colors ${splitMode === 'SHARES' ? 'bg-brand-100 text-brand-700 shadow-sm' : 'text-slate-500 hover:bg-slate-50'}`}
+                    >
+                        By Shares
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setSplitMode('CUSTOM')}
+                        className={`flex-1 px-3 py-1 text-[10px] sm:text-xs font-medium rounded-md transition-colors ${splitMode === 'CUSTOM' ? 'bg-brand-100 text-brand-700 shadow-sm' : 'text-slate-500 hover:bg-slate-50'}`}
                     >
                         Unequally
                     </button>
                 </div>
              </div>
 
-             {splitType === 'EQUAL' && (
+             {splitMode === 'EQUAL' && (
                 <div className="flex flex-wrap gap-2">
-                    {users.map(user => {
+                    {activeUsers.map(user => {
                         const isSelected = involvedUserIds.includes(user.id);
                         return (
                             <button
@@ -323,9 +401,54 @@ export const ExpenseForm: React.FC<ExpenseFormProps> = ({ users, currentUser, on
                 </div>
              )}
 
-             {splitType === 'CUSTOM' && (
+             {splitMode === 'SHARES' && (
                 <div className="space-y-2">
-                    {users.map(user => {
+                   {activeUsers.map(user => {
+                      const isSelected = involvedUserIds.includes(user.id);
+                      const shareCount = userShares[user.id] || 0;
+                      return (
+                         <div key={user.id} className={`flex items-center gap-3 ${!isSelected ? 'opacity-50' : ''}`}>
+                             <div className="flex-1 flex items-center gap-2">
+                                <input 
+                                    type="checkbox"
+                                    checked={isSelected}
+                                    onChange={() => toggleUserInvolvement(user.id)}
+                                    className="rounded text-brand-600 focus:ring-brand-500 border-gray-300"
+                                />
+                                <span className="text-sm text-slate-700">{user.name}</span>
+                             </div>
+                             <div className="flex items-center gap-2">
+                                <div className="flex items-center border rounded-md overflow-hidden bg-white">
+                                   <button 
+                                     type="button" 
+                                     disabled={!isSelected || shareCount <= 0}
+                                     onClick={() => handleShareChange(user.id, -1)}
+                                     className="px-2 py-1 hover:bg-slate-100 disabled:opacity-50"
+                                   >-</button>
+                                   <span className="w-8 text-center text-sm font-medium">{shareCount}</span>
+                                   <button 
+                                     type="button" 
+                                     disabled={!isSelected}
+                                     onClick={() => handleShareChange(user.id, 1)}
+                                     className="px-2 py-1 hover:bg-slate-100 disabled:opacity-50"
+                                   >+</button>
+                                </div>
+                                <span className="w-16 text-right text-xs text-slate-500">
+                                   {parseFloat(amount || '0') > 0 ? (getShareAmount(user.id)).toFixed(2) : '0.00'}
+                                </span>
+                             </div>
+                         </div>
+                      )
+                   })}
+                   <div className="text-right text-xs text-brand-600 pt-2">
+                      Total Shares: {getTotalShares()}
+                   </div>
+                </div>
+             )}
+
+             {splitMode === 'CUSTOM' && (
+                <div className="space-y-2">
+                    {activeUsers.map(user => {
                          const isSelected = involvedUserIds.includes(user.id);
                          return (
                              <div key={user.id} className={`flex items-center gap-3 ${!isSelected ? 'opacity-50' : ''}`}>
@@ -383,8 +506,8 @@ export const ExpenseForm: React.FC<ExpenseFormProps> = ({ users, currentUser, on
              <Button type="button" variant="secondary" onClick={onCancel} className="flex-1">
               Cancel
             </Button>
-            <Button type="submit" className="flex-1" icon={<Plus className="w-4 h-4" />}>
-              Add Expense
+            <Button type="submit" className="flex-1" icon={initialData ? <Save className="w-4 h-4" /> : <Plus className="w-4 h-4" />}>
+              {initialData ? 'Save Changes' : 'Add Expense'}
             </Button>
           </div>
         </form>

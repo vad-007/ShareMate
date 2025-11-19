@@ -1,18 +1,47 @@
+
 import React, { useState } from 'react';
-import { User } from '../types';
+import { User, Group, Expense } from '../types';
 import { Button } from './Button';
-import { Plus, Trash2, Users, Copy } from 'lucide-react';
+import { Plus, Trash2, Users, Copy, Save, Download, AlertTriangle, Settings, Clock, Bell, RefreshCw, UserX, RotateCcw, Shield, Eye } from 'lucide-react';
+import { generateCSV, formatCurrency } from '../utils/calculations';
+import { PrivacyPolicyModal } from './PrivacyPolicyModal';
 
 interface GroupSettingsProps {
   users: User[];
+  group: Group;
+  expenses: Expense[];
   onAddUser: (name: string) => void;
   onRemoveUser: (id: string) => void;
+  onReactivateUser: (id: string) => void;
+  onUpdateGroup: (updates: Partial<Group>) => void;
+  onDeleteGroup: () => void;
+  onToggleRecurring: (expenseId: string) => void;
 }
 
-export const GroupSettings: React.FC<GroupSettingsProps> = ({ users, onAddUser, onRemoveUser }) => {
+export const GroupSettings: React.FC<GroupSettingsProps> = ({ 
+  users, 
+  group, 
+  expenses,
+  onAddUser, 
+  onRemoveUser, 
+  onReactivateUser,
+  onUpdateGroup,
+  onDeleteGroup,
+  onToggleRecurring
+}) => {
   const [newUserName, setNewUserName] = useState('');
+  const [editName, setEditName] = useState(group.name);
+  const [editCurrency, setEditCurrency] = useState(group.currency);
+  const [editTimezone, setEditTimezone] = useState(group.timezone || 'Asia/Kolkata');
+  const [notificationPrefs, setNotificationPrefs] = useState(group.notificationPrefs || { push: true, email: false, sms: false });
+  const [isDirty, setIsDirty] = useState(false);
+  const [showPrivacy, setShowPrivacy] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const activeUsers = users.filter(u => u.isActive !== false);
+  const inactiveUsers = users.filter(u => u.isActive === false);
+  const recurringExpenses = expenses.filter(e => e.isRecurring);
+
+  const handleAddUserSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (newUserName.trim()) {
       onAddUser(newUserName.trim());
@@ -20,21 +49,184 @@ export const GroupSettings: React.FC<GroupSettingsProps> = ({ users, onAddUser, 
     }
   };
 
+  const handleGroupUpdate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (editName.trim()) {
+        onUpdateGroup({
+          name: editName.trim(), 
+          currency: editCurrency, 
+          timezone: editTimezone,
+          notificationPrefs
+        });
+        setIsDirty(false);
+        alert("Group settings updated!");
+    }
+  };
+
   const copyInviteLink = () => {
     // Mock functionality
-    alert("Invite link copied to clipboard: sharemates.app/join/group-xyz");
+    const link = `https://sharemates.app/join/${group.id}`;
+    navigator.clipboard.writeText(link).then(() => {
+         alert("Invite link copied: " + link);
+    });
+  };
+  
+  const handleExport = () => {
+    const csv = generateCSV(expenses, users);
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ShareMates_${group.name.replace(/\s+/g,'_')}_Export.csv`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  const handleDeleteGroup = () => {
+      const confirmText = `DELETE-${group.name.toUpperCase().replace(/\s/g, '')}`;
+      const input = prompt(`DANGER: This will wipe all data locally.\nTo confirm, type "${confirmText}"`);
+      if (input === confirmText) {
+          onDeleteGroup();
+      } else if (input !== null) {
+          alert("Incorrect confirmation text. Action cancelled.");
+      }
+  };
+
+  // Helper to get timezones safely
+  const getTimeZones = () => {
+    if ((Intl as any).supportedValuesOf) {
+      return (Intl as any).supportedValuesOf('timeZone');
+    }
+    // Fallback if not supported
+    return [
+      'Asia/Kolkata',
+      'America/New_York',
+      'Europe/London',
+      'UTC'
+    ];
   };
 
   return (
-    <div className="space-y-6 max-w-2xl mx-auto">
+    <div className="space-y-8 max-w-2xl mx-auto pb-12">
+      
+      {/* General Settings */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6">
+         <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2 mb-6">
+            <Settings className="w-6 h-6 text-brand-600" />
+            General Settings
+         </h2>
+         
+         <form onSubmit={handleGroupUpdate} className="space-y-4">
+             <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Group Name</label>
+                <input 
+                    type="text" 
+                    value={editName}
+                    onChange={(e) => { setEditName(e.target.value); setIsDirty(true); }}
+                    className="w-full rounded-lg border-slate-300 border px-4 py-2 focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none"
+                />
+             </div>
+             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Currency</label>
+                    <select
+                        value={editCurrency}
+                        onChange={(e) => { setEditCurrency(e.target.value); setIsDirty(true); }}
+                        className="w-full rounded-lg border-slate-300 border px-4 py-2 focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none bg-white"
+                    >
+                        <option value="INR">INR (₹)</option>
+                        <option value="USD">USD ($)</option>
+                        <option value="EUR">EUR (€)</option>
+                        <option value="GBP">GBP (£)</option>
+                    </select>
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1 flex items-center gap-1">
+                       <Clock className="w-3 h-3" /> Timezone
+                    </label>
+                    <select
+                        value={editTimezone}
+                        onChange={(e) => { setEditTimezone(e.target.value); setIsDirty(true); }}
+                        className="w-full rounded-lg border-slate-300 border px-4 py-2 focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none bg-white"
+                    >
+                        {getTimeZones().map((tz: string) => (
+                           <option key={tz} value={tz}>{tz}</option>
+                        ))}
+                    </select>
+                </div>
+             </div>
+             
+             {/* Notification Prefs */}
+             <div className="pt-2">
+                <label className="block text-sm font-medium text-slate-700 mb-2 flex items-center gap-1">
+                   <Bell className="w-3 h-3" /> Notifications
+                </label>
+                <div className="flex gap-4">
+                    {Object.entries(notificationPrefs).map(([key, val]) => (
+                        <label key={key} className="flex items-center gap-2 cursor-pointer">
+                            <input 
+                              type="checkbox" 
+                              checked={val}
+                              onChange={() => {
+                                  setNotificationPrefs(prev => ({...prev, [key]: !val}));
+                                  setIsDirty(true);
+                              }}
+                              className="rounded text-brand-600 focus:ring-brand-500 border-gray-300"
+                            />
+                            <span className="text-sm capitalize text-slate-600">{key}</span>
+                        </label>
+                    ))}
+                </div>
+             </div>
+             
+             <div className="flex justify-end pt-4 border-t border-slate-100 mt-4">
+                 <Button type="submit" disabled={!isDirty} icon={<Save className="w-4 h-4" />}>
+                     Save Changes
+                 </Button>
+             </div>
+         </form>
+      </div>
+      
+      {/* Recurring Expenses Manager */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6">
+          <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 mb-4">
+               <RefreshCw className="w-5 h-5 text-brand-600" />
+               Recurring Expenses
+          </h3>
+          {recurringExpenses.length === 0 ? (
+              <p className="text-sm text-slate-400 italic">No recurring expenses found.</p>
+          ) : (
+              <div className="space-y-3">
+                  {recurringExpenses.map(exp => (
+                      <div key={exp.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
+                          <div className="flex flex-col">
+                              <span className="font-medium text-slate-800">{exp.description}</span>
+                              <div className="text-xs text-slate-500 flex items-center gap-2">
+                                 <span>{formatCurrency(exp.amount, group.currency)}</span>
+                                 <span>•</span>
+                                 <span>Monthly</span>
+                              </div>
+                          </div>
+                          <button 
+                             onClick={() => onToggleRecurring(exp.id)}
+                             className="text-xs bg-white border border-slate-200 text-slate-600 px-3 py-1 rounded-full hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors"
+                          >
+                              Stop Recurring
+                          </button>
+                      </div>
+                  ))}
+              </div>
+          )}
+      </div>
+
+      {/* Member Management */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6">
         <div className="flex items-center justify-between mb-6">
            <div>
-             <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-               <Users className="w-6 h-6 text-brand-600" />
-               House Group Settings
-             </h2>
-             <p className="text-slate-500 text-sm mt-1">Manage your housemates and group details.</p>
+             <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+               <Users className="w-5 h-5 text-brand-600" />
+               Housemates
+             </h3>
            </div>
            <Button variant="outline" size="sm" onClick={copyInviteLink} icon={<Copy className="w-4 h-4" />}>
              Invite Link
@@ -42,33 +234,60 @@ export const GroupSettings: React.FC<GroupSettingsProps> = ({ users, onAddUser, 
         </div>
 
         <div className="mb-8">
-           <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wider mb-3">Housemates</h3>
            <div className="space-y-3">
-             {users.map(user => (
+             {/* Active Users */}
+             {activeUsers.map(user => (
                <div key={user.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
                  <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-full bg-brand-100 flex items-center justify-center text-brand-700 font-bold">
                       {user.name.substring(0, 2).toUpperCase()}
                     </div>
-                    <span className="font-medium text-slate-800">{user.name}</span>
+                    <div className="flex flex-col">
+                        <span className="font-medium text-slate-800">{user.name}</span>
+                        <span className="text-xs text-slate-400">{user.role || 'MEMBER'}</span>
+                    </div>
                  </div>
-                 {users.length > 2 && (
+                 {users.length > 1 && (
                     <button 
                       onClick={() => onRemoveUser(user.id)}
                       className="text-slate-400 hover:text-red-500 transition-colors p-2"
-                      title="Remove User"
+                      title="Deactivate User (Preserve History)"
                     >
-                      <Trash2 className="w-5 h-5" />
+                      <UserX className="w-5 h-5" />
                     </button>
                  )}
                </div>
              ))}
+             
+             {/* Inactive Users */}
+             {inactiveUsers.length > 0 && (
+                <div className="pt-4">
+                    <h5 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Former Members</h5>
+                    {inactiveUsers.map(user => (
+                        <div key={user.id} className="flex items-center justify-between p-3 bg-slate-50/50 rounded-lg border border-slate-100 border-dashed">
+                            <div className="flex items-center gap-3 opacity-60">
+                                <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-slate-500 font-bold text-xs">
+                                {user.name.substring(0, 2).toUpperCase()}
+                                </div>
+                                <span className="text-sm font-medium text-slate-600">{user.name}</span>
+                            </div>
+                            <button 
+                                onClick={() => onReactivateUser(user.id)}
+                                className="text-slate-400 hover:text-green-600 transition-colors p-2"
+                                title="Reactivate User"
+                            >
+                                <RotateCcw className="w-4 h-4" />
+                            </button>
+                        </div>
+                    ))}
+                </div>
+             )}
            </div>
         </div>
 
         <div>
-          <h3 className="text-sm font-semibold text-slate-700 uppercase tracking-wider mb-3">Add New Housemate</h3>
-          <form onSubmit={handleSubmit} className="flex gap-3">
+          <h4 className="text-sm font-semibold text-slate-700 uppercase tracking-wider mb-3">Add New Housemate</h4>
+          <form onSubmit={handleAddUserSubmit} className="flex gap-3">
             <input
               type="text"
               value={newUserName}
@@ -83,12 +302,55 @@ export const GroupSettings: React.FC<GroupSettingsProps> = ({ users, onAddUser, 
         </div>
       </div>
       
-      <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex gap-3">
-        <div className="text-blue-600">ℹ️</div>
-        <p className="text-sm text-blue-700">
-          Adding a new housemate will include them in future expenses. Existing settlement calculations will update automatically.
-        </p>
+      {/* Data Management */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6">
+         <h3 className="text-lg font-bold text-slate-800 mb-4">Data Management</h3>
+         <div className="flex items-center justify-between">
+             <div>
+                 <p className="text-sm text-slate-600 font-medium">Export Expenses</p>
+                 <p className="text-xs text-slate-400">Download a CSV file of all expense history.</p>
+             </div>
+             <Button variant="secondary" onClick={handleExport} icon={<Download className="w-4 h-4" />}>
+                 Export CSV
+             </Button>
+         </div>
       </div>
+
+      {/* Privacy & Security Section */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-6">
+          <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 mb-4">
+            <Shield className="w-5 h-5 text-brand-600" />
+            Privacy & Security
+          </h3>
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-slate-600 max-w-sm">
+              Learn how your data is stored locally, how we handle encryption, and your data rights.
+            </p>
+            <Button variant="secondary" onClick={() => setShowPrivacy(true)} icon={<Eye className="w-4 h-4" />}>
+              Policy
+            </Button>
+          </div>
+      </div>
+
+      {/* Danger Zone */}
+      <div className="bg-red-50 rounded-xl shadow-sm border border-red-100 p-6">
+         <h3 className="text-lg font-bold text-red-700 flex items-center gap-2 mb-4">
+            <AlertTriangle className="w-5 h-5" />
+            Danger Zone
+         </h3>
+         <div className="flex items-center justify-between">
+             <div>
+                 <p className="text-sm text-red-800 font-medium">Delete Group</p>
+                 <p className="text-xs text-red-600/80">Irreversibly deletes all users, expenses, and settings from this device.</p>
+             </div>
+             <Button variant="danger" onClick={handleDeleteGroup} icon={<Trash2 className="w-4 h-4" />}>
+                 Delete Group
+             </Button>
+         </div>
+      </div>
+
+      {/* Privacy Modal */}
+      {showPrivacy && <PrivacyPolicyModal onClose={() => setShowPrivacy(false)} />}
     </div>
   );
 };
