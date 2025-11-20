@@ -4,8 +4,14 @@ import { ReceiptData, Category } from '../types';
 
 const parseReceiptImage = async (base64Image: string): Promise<ReceiptData> => {
   // The API key must be obtained exclusively from the environment variable process.env.API_KEY.
-  // We assume this variable is pre-configured, valid, and accessible.
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  // We cast it to string to satisfy TypeScript during the build command.
+  const apiKey = process.env.API_KEY as string;
+
+  if (!apiKey) {
+    console.warn("API_KEY is missing. OCR features will fail.");
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
 
   try {
     const response = await ai.models.generateContent({
