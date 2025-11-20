@@ -163,8 +163,6 @@ function App() {
         const updatedExpense: Expense = {
             ...editingExpense,
             ...data,
-            // Preserve confirmations if not changed significantly, or reset? 
-            // For MVP, let's reset confirmations if amount/splits change, but keeping simple:
             confirmations: createInitialConfirmations(data.involvedUserIds, data.payerId) 
         };
 
@@ -312,15 +310,21 @@ function App() {
       showToast('Payment recorded and balance updated');
   };
 
-  const handleAddUser = (name: string) => {
+  const handleAddUser = (name: string, phoneNumber?: string) => {
     const newUser: User = {
       id: `u${Date.now()}`,
       name,
+      phoneNumber,
       role: 'MEMBER',
       isActive: true
     };
     setUsers(prev => [...prev, newUser]);
     showToast(`${name} added to group`);
+  };
+
+  const handleUpdateUser = (userId: string, updates: Partial<User>) => {
+      setUsers(prev => prev.map(u => u.id === userId ? { ...u, ...updates } : u));
+      showToast("Member details updated");
   };
 
   const handleRemoveUser = (id: string) => {
@@ -509,7 +513,8 @@ function App() {
               users={users}
               group={group}
               expenses={expenses}
-              onAddUser={handleAddUser} 
+              onAddUser={handleAddUser}
+              onUpdateUser={handleUpdateUser}
               onRemoveUser={handleRemoveUser}
               onReactivateUser={handleReactivateUser}
               onUpdateGroup={handleUpdateGroup}

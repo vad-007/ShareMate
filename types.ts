@@ -34,6 +34,7 @@ export interface User {
   name: string;
   email?: string; 
   avatarUrl?: string;
+  phoneNumber?: string; // Added phone number support
   role?: UserRole;
   isActive?: boolean; // For soft delete
 }

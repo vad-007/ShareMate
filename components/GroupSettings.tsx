@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { User, Group, Expense } from '../types';
 import { Button } from './Button';
-import { Plus, Trash2, Users, Copy, Save, Download, AlertTriangle, Settings, Clock, Bell, RefreshCw, UserX, RotateCcw, Shield, Eye } from 'lucide-react';
+import { Plus, Trash2, Users, Copy, Save, Download, AlertTriangle, Settings, Clock, Bell, RefreshCw, UserX, RotateCcw, Shield, Eye, Pencil, X, Check } from 'lucide-react';
 import { generateCSV, formatCurrency } from '../utils/calculations';
 import { PrivacyPolicyModal } from './PrivacyPolicyModal';
 
@@ -10,7 +10,8 @@ interface GroupSettingsProps {
   users: User[];
   group: Group;
   expenses: Expense[];
-  onAddUser: (name: string) => void;
+  onAddUser: (name: string, phoneNumber?: string) => void;
+  onUpdateUser: (id: string, updates: Partial<User>) => void;
   onRemoveUser: (id: string) => void;
   onReactivateUser: (id: string) => void;
   onUpdateGroup: (updates: Partial<Group>) => void;
@@ -22,19 +23,31 @@ export const GroupSettings: React.FC<GroupSettingsProps> = ({
   users, 
   group, 
   expenses,
-  onAddUser, 
+  onAddUser,
+  onUpdateUser,
   onRemoveUser, 
   onReactivateUser,
   onUpdateGroup,
   onDeleteGroup,
   onToggleRecurring
 }) => {
-  const [newUserName, setNewUserName] = useState('');
+  // Group Settings State
   const [editName, setEditName] = useState(group.name);
   const [editCurrency, setEditCurrency] = useState(group.currency);
   const [editTimezone, setEditTimezone] = useState(group.timezone || 'Asia/Kolkata');
   const [notificationPrefs, setNotificationPrefs] = useState(group.notificationPrefs || { push: true, email: false, sms: false });
   const [isDirty, setIsDirty] = useState(false);
+  
+  // User Management State
+  const [newUserName, setNewUserName] = useState('');
+  const [newUserPhone, setNewUserPhone] = useState('');
+  
+  // Edit User State
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [editingUserName, setEditingUserName] = useState('');
+  const [editingUserPhone, setEditingUserPhone] = useState('');
+
+  // Modals
   const [showPrivacy, setShowPrivacy] = useState(false);
 
   const activeUsers = users.filter(u => u.isActive !== false);
@@ -44,9 +57,26 @@ export const GroupSettings: React.FC<GroupSettingsProps> = ({
   const handleAddUserSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (newUserName.trim()) {
-      onAddUser(newUserName.trim());
+      onAddUser(newUserName.trim(), newUserPhone.trim());
       setNewUserName('');
+      setNewUserPhone('');
     }
+  };
+
+  const startEditingUser = (user: User) => {
+      setEditingUserId(user.id);
+      setEditingUserName(user.name);
+      setEditingUserPhone(user.phoneNumber || '');
+  };
+
+  const saveUserEdit = (id: string) => {
+      if (editingUserName.trim()) {
+          onUpdateUser(id, { 
+              name: editingUserName.trim(), 
+              phoneNumber: editingUserPhone.trim() 
+          });
+          setEditingUserId(null);
+      }
   };
 
   const handleGroupUpdate = (e: React.FormEvent) => {
@@ -64,7 +94,6 @@ export const GroupSettings: React.FC<GroupSettingsProps> = ({
   };
 
   const copyInviteLink = () => {
-    // Mock functionality
     const link = `https://sharemates.app/join/${group.id}`;
     navigator.clipboard.writeText(link).then(() => {
          alert("Invite link copied: " + link);
@@ -92,18 +121,11 @@ export const GroupSettings: React.FC<GroupSettingsProps> = ({
       }
   };
 
-  // Helper to get timezones safely
   const getTimeZones = () => {
     if ((Intl as any).supportedValuesOf) {
       return (Intl as any).supportedValuesOf('timeZone');
     }
-    // Fallback if not supported
-    return [
-      'Asia/Kolkata',
-      'America/New_York',
-      'Europe/London',
-      'UTC'
-    ];
+    return ['Asia/Kolkata', 'America/New_York', 'Europe/London', 'UTC'];
   };
 
   return (
@@ -238,24 +260,62 @@ export const GroupSettings: React.FC<GroupSettingsProps> = ({
              {/* Active Users */}
              {activeUsers.map(user => (
                <div key={user.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
-                 <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-brand-100 flex items-center justify-center text-brand-700 font-bold">
+                 <div className="flex items-center gap-3 flex-1">
+                    <div className="w-10 h-10 rounded-full bg-brand-100 flex items-center justify-center text-brand-700 font-bold flex-shrink-0">
                       {user.name.substring(0, 2).toUpperCase()}
                     </div>
-                    <div className="flex flex-col">
-                        <span className="font-medium text-slate-800">{user.name}</span>
-                        <span className="text-xs text-slate-400">{user.role || 'MEMBER'}</span>
-                    </div>
+                    
+                    {editingUserId === user.id ? (
+                        <div className="flex-1 flex flex-col gap-2 mr-2">
+                            <input 
+                                type="text" 
+                                value={editingUserName}
+                                onChange={(e) => setEditingUserName(e.target.value)}
+                                className="w-full text-sm border-slate-300 rounded px-2 py-1"
+                                placeholder="Name"
+                            />
+                            <input 
+                                type="tel" 
+                                value={editingUserPhone}
+                                onChange={(e) => setEditingUserPhone(e.target.value)}
+                                className="w-full text-xs border-slate-300 rounded px-2 py-1"
+                                placeholder="Phone Number"
+                            />
+                        </div>
+                    ) : (
+                        <div className="flex flex-col">
+                            <span className="font-medium text-slate-800">{user.name}</span>
+                            <span className="text-xs text-slate-400">{user.phoneNumber || user.role || 'MEMBER'}</span>
+                        </div>
+                    )}
                  </div>
-                 {users.length > 1 && (
-                    <button 
-                      onClick={() => onRemoveUser(user.id)}
-                      className="text-slate-400 hover:text-red-500 transition-colors p-2"
-                      title="Deactivate User (Preserve History)"
-                    >
-                      <UserX className="w-5 h-5" />
-                    </button>
-                 )}
+
+                 <div className="flex items-center gap-1">
+                    {editingUserId === user.id ? (
+                        <>
+                            <button onClick={() => saveUserEdit(user.id)} className="p-2 text-green-600 hover:bg-green-50 rounded"><Check className="w-4 h-4"/></button>
+                            <button onClick={() => setEditingUserId(null)} className="p-2 text-slate-400 hover:bg-slate-100 rounded"><X className="w-4 h-4"/></button>
+                        </>
+                    ) : (
+                        <button 
+                           onClick={() => startEditingUser(user)}
+                           className="text-slate-400 hover:text-brand-600 transition-colors p-2"
+                           title="Edit Details"
+                        >
+                           <Pencil className="w-4 h-4" />
+                        </button>
+                    )}
+                    
+                    {users.length > 1 && (
+                        <button 
+                        onClick={() => onRemoveUser(user.id)}
+                        className="text-slate-400 hover:text-red-500 transition-colors p-2"
+                        title="Deactivate User"
+                        >
+                        <UserX className="w-5 h-5" />
+                        </button>
+                    )}
+                 </div>
                </div>
              ))}
              
@@ -287,14 +347,23 @@ export const GroupSettings: React.FC<GroupSettingsProps> = ({
 
         <div>
           <h4 className="text-sm font-semibold text-slate-700 uppercase tracking-wider mb-3">Add New Housemate</h4>
-          <form onSubmit={handleAddUserSubmit} className="flex gap-3">
-            <input
-              type="text"
-              value={newUserName}
-              onChange={(e) => setNewUserName(e.target.value)}
-              placeholder="Enter name..."
-              className="flex-1 rounded-lg border-slate-300 border px-4 py-2 focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none"
-            />
+          <form onSubmit={handleAddUserSubmit} className="flex flex-col sm:flex-row gap-3">
+            <div className="flex-1 flex gap-3">
+                <input
+                    type="text"
+                    value={newUserName}
+                    onChange={(e) => setNewUserName(e.target.value)}
+                    placeholder="Name"
+                    className="flex-[2] rounded-lg border-slate-300 border px-4 py-2 focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none"
+                />
+                <input
+                    type="tel"
+                    value={newUserPhone}
+                    onChange={(e) => setNewUserPhone(e.target.value)}
+                    placeholder="Phone (Optional)"
+                    className="flex-1 rounded-lg border-slate-300 border px-4 py-2 focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none"
+                />
+            </div>
             <Button type="submit" disabled={!newUserName.trim()} icon={<Plus className="w-4 h-4" />}>
               Add
             </Button>

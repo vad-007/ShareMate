@@ -2,7 +2,7 @@
 import React from 'react';
 import { User, Transaction, Expense } from '../types';
 import { formatCurrency, generateCSV, calculateBalances } from '../utils/calculations';
-import { CheckCircle2, ArrowRight, Banknote, Download, Check, Copy, Scale } from 'lucide-react';
+import { CheckCircle2, ArrowRight, Banknote, Download, Check, Copy, Scale, MessageCircle } from 'lucide-react';
 import { Button } from './Button';
 
 interface SettlementPlanProps {
@@ -16,7 +16,8 @@ interface SettlementPlanProps {
 export const SettlementPlan: React.FC<SettlementPlanProps> = ({ transactions, users, expenses, currency, onSettleTransaction }) => {
   const balances = calculateBalances(expenses, users);
   
-  const getUserName = (id: string) => users.find(u => u.id === id)?.name || 'Unknown';
+  const getUser = (id: string) => users.find(u => u.id === id);
+  const getUserName = (id: string) => getUser(id)?.name || 'Unknown';
 
   const handleDownloadCSV = () => {
     const csv = generateCSV(expenses, users);
@@ -34,6 +35,25 @@ export const SettlementPlan: React.FC<SettlementPlanProps> = ({ transactions, us
       navigator.clipboard.writeText(text).then(() => {
           alert("Payment instruction copied to clipboard!");
       });
+  };
+
+  const handleWhatsAppClick = (t: Transaction) => {
+      const creditor = getUser(t.toUserId);
+      const debtor = getUser(t.fromUserId);
+      const amount = formatCurrency(t.amount, currency);
+      
+      const text = `Hi ${creditor?.name}, sending you ${amount} for ShareMates settlement.`;
+      
+      let url = '';
+      if (creditor?.phoneNumber) {
+          // Clean phone number
+          const cleanPhone = creditor.phoneNumber.replace(/\D/g, '');
+          url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`;
+      } else {
+          url = `https://wa.me/?text=${encodeURIComponent(text)}`;
+      }
+      
+      window.open(url, '_blank');
   };
 
   if (transactions.length === 0 && Math.abs(Object.values(balances).reduce((a,b)=>a+Math.abs(b),0)) < 0.1) {
@@ -147,6 +167,13 @@ export const SettlementPlan: React.FC<SettlementPlanProps> = ({ transactions, us
                                 <div className="text-lg font-bold text-slate-800">{formatCurrency(t.amount, currency)}</div>
                                 
                                 <div className="flex items-center gap-2">
+                                    <button 
+                                        onClick={() => handleWhatsAppClick(t)}
+                                        className="p-2 text-green-600 hover:bg-green-50 rounded-full transition-colors border border-transparent hover:border-green-200"
+                                        title="Share on WhatsApp"
+                                    >
+                                        <MessageCircle className="w-4 h-4" />
+                                    </button>
                                     <button 
                                         onClick={() => handleCopyInstruction(t)}
                                         className="p-2 text-slate-400 hover:text-brand-600 hover:bg-brand-50 rounded-full transition-colors"
