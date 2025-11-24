@@ -1,4 +1,3 @@
-
 import { Expense, User, Transaction, Category } from '../types';
 
 export const calculateBalances = (expenses: Expense[], users: User[]): { [userId: string]: number } => {
@@ -11,6 +10,9 @@ export const calculateBalances = (expenses: Expense[], users: User[]): { [userId
 
   // Calculate net balance for each user
   expenses.forEach(expense => {
+    // Skip settlement transactions for balance calculation as they are just moving money
+    if (expense.type === 'SETTLEMENT') return;
+
     const paidBy = expense.payerId;
     const amount = expense.amount;
     
@@ -40,6 +42,54 @@ export const calculateBalances = (expenses: Expense[], users: User[]): { [userId
   });
 
   return balances;
+};
+
+export interface UserStats {
+  paid: number;
+  share: number;
+  balance: number;
+}
+
+export const calculateDetailedStats = (expenses: Expense[], users: User[]): { [userId: string]: UserStats } => {
+  const stats: { [userId: string]: UserStats } = {};
+  
+  // Initialize
+  users.forEach(u => {
+    stats[u.id] = { paid: 0, share: 0, balance: 0 };
+  });
+
+  expenses.forEach(expense => {
+     if (expense.type === 'SETTLEMENT') return; // Ignore settlements in spending stats
+
+     const amount = expense.amount;
+     
+     // 1. Add to Payer's "Paid" total
+     if (stats[expense.payerId]) {
+         stats[expense.payerId].paid += amount;
+     }
+
+     // 2. Add to Involved Users' "Share" total
+     if (expense.splitType === 'CUSTOM' && expense.splitDetails) {
+         Object.entries(expense.splitDetails).forEach(([uid, shareAmt]) => {
+             if (stats[uid]) stats[uid].share += shareAmt;
+         });
+     } else {
+         const validUsers = expense.involvedUserIds.filter(id => stats[id]);
+         if (validUsers.length > 0) {
+             const splitAmt = amount / validUsers.length;
+             validUsers.forEach(uid => {
+                 stats[uid].share += splitAmt;
+             });
+         }
+     }
+  });
+
+  // 3. Calculate Net Balance (Paid - Share)
+  Object.keys(stats).forEach(uid => {
+      stats[uid].balance = stats[uid].paid - stats[uid].share;
+  });
+
+  return stats;
 };
 
 export const calculateSettlements = (expenses: Expense[], users: User[]): Transaction[] => {
@@ -144,8 +194,16 @@ export const generateCSV = (expenses: Expense[], users: User[]) => {
   return [headers.join(','), ...rows].join('\n');
 };
 
-export const generateWhatsAppLink = (expense: Expense, currency: string) => {
+export const generateWhatsAppLink = (expense: Expense, currency: string, phoneNumber?: string) => {
     const symbol = currency === 'INR' ? '₹' : currency;
-    const text = `New expense on ShareMates: '${expense.description}' for ${symbol}${expense.amount}. Added by me. Please confirm on app.`;
-    return `https://wa.me/?text=${encodeURIComponent(text)}`;
+    const text = `Hi, I added "${expense.description}" (${symbol}${expense.amount}) on ShareMates. Your share is calculated in the app.`;
+    const encodedText = encodeURIComponent(text);
+
+    if (phoneNumber) {
+        // Remove all non-digit characters from phone number
+        const cleanPhone = phoneNumber.replace(/\D/g, '');
+        return `https://wa.me/${cleanPhone}?text=${encodedText}`;
+    }
+    // Default share link if no specific number
+    return `https://wa.me/?text=${encodedText}`;
 };

@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo, useEffect } from 'react';
 import { Home, PlusCircle, Users, Banknote, Menu, X, Settings, LogOut } from 'lucide-react';
 import { User, Expense, Category, Transaction, ConfirmationStatus, Group } from './types';
@@ -101,20 +100,29 @@ function App() {
     setToast({ msg, type, visible: true, action });
   };
 
-  const triggerNotificationSimulation = (expense: Expense, involvedCount: number) => {
-      showToast(`Notifying ${involvedCount} members...`, 'info');
+  const handleExpenseNotification = (expense: Expense) => {
+      // Identify who should be notified
+      const involvedOthers = expense.involvedUserIds.filter(id => id !== expense.payerId);
       
-      setTimeout(() => {
-          const link = generateWhatsAppLink(expense, group?.currency || 'INR');
-          showToast(
-            "Expense saved! Notifications sent.", 
-            'success', 
-            { 
-                label: "Share on WhatsApp", 
-                onClick: () => window.open(link, '_blank') 
-            }
-          );
-      }, 1500);
+      let targetPhoneNumber: string | undefined = undefined;
+      
+      // If exactly one other person is involved, we can target them directly
+      if (involvedOthers.length === 1) {
+          const targetUser = users.find(u => u.id === involvedOthers[0]);
+          targetPhoneNumber = targetUser?.phoneNumber;
+      }
+
+      const link = generateWhatsAppLink(expense, group?.currency || 'INR', targetPhoneNumber);
+      
+      // Immediate notification toast with Action Button
+      showToast(
+        "Expense Saved!", 
+        'success', 
+        { 
+            label: targetPhoneNumber ? "Msg Housemate" : "Share on WhatsApp", 
+            onClick: () => window.open(link, '_blank') 
+        }
+      );
   };
 
   const handleOnboardingComplete = (userName: string, groupName: string, currency: string) => {
@@ -184,7 +192,8 @@ function App() {
         };
         setExpenses(prev => [...prev, newExpense]);
         setCurrentView(View.DASHBOARD);
-        triggerNotificationSimulation(newExpense, newExpense.involvedUserIds.length - 1);
+        // Trigger real notification prompt
+        handleExpenseNotification(newExpense);
     }
   };
 
@@ -215,7 +224,7 @@ function App() {
       setIsQuickAddOpen(false);
       
       if (notify) {
-          triggerNotificationSimulation(newExpense, involved.length - (involved.includes(newExpense.payerId) ? 1 : 0));
+          handleExpenseNotification(newExpense);
       } else {
           showToast("Quick Add saved successfully.");
       }
@@ -262,7 +271,7 @@ function App() {
           confirmations: createInitialConfirmations(involved, currentUser.id)
       };
       setExpenses(prev => [...prev, newExpense]);
-      triggerNotificationSimulation(newExpense, involved.length - 1);
+      handleExpenseNotification(newExpense);
   };
 
   const handleQuickAddTemplate = (template: Expense) => {
@@ -279,7 +288,7 @@ function App() {
           confirmations: createInitialConfirmations(template.involvedUserIds, template.payerId)
       };
       setExpenses(prev => [...prev, newExpense]);
-      triggerNotificationSimulation(newExpense, newExpense.involvedUserIds.length - 1);
+      handleExpenseNotification(newExpense);
   };
 
   const handleSettleTransaction = (txn: Transaction) => {
